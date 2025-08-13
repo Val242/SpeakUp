@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function AdminDashboard() {
   // États pour la gestion de l'interface
@@ -50,6 +50,27 @@ export default function AdminDashboard() {
     }
   ]);
 
+  // Notifications Admin
+  const [adminNotifications, setAdminNotifications] = useState([]);
+  const [showAdminNotifications, setShowAdminNotifications] = useState(false);
+  const adminNotificationsRef = useRef(null);
+  const addNotification = (message) => {
+    setAdminNotifications((prev) => [
+      `${new Date().toLocaleTimeString()} • ${message}`,
+      ...prev,
+    ]);
+  };
+
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (adminNotificationsRef.current && !adminNotificationsRef.current.contains(e.target)) {
+        setShowAdminNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
+
   // Fonction de déconnexion
   const handleLogout = () => {
     window.location.hash = '#/';
@@ -77,14 +98,82 @@ export default function AdminDashboard() {
     setShowAssignModal(true);
   };
 
+  // Admin inbox polling for collaborator finish + new feedback detection
+  const adminInboxRef = useRef([]);
+  const prevIdsRef = useRef(new Set());
+  useEffect(() => {
+    const poll = () => {
+      try {
+        const inbox = JSON.parse(localStorage.getItem('inbox:admin') || '[]');
+        if (inbox.length > 0) {
+          const item = inbox.shift();
+          localStorage.setItem('inbox:admin', JSON.stringify(inbox));
+          addNotification(item.message || 'Notification');
+        }
+      } catch {}
+    };
+    const id = setInterval(poll, 1500);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    // detect new feedback objects added to feedbacks state
+    try {
+      const current = new Set(feedbacks.map(f => f.id));
+      const prev = prevIdsRef.current;
+      feedbacks.forEach(f => { if (!prev.has(f.id)) addNotification(`Nouveau feedback: #${f.id}`); });
+      prevIdsRef.current = current;
+    } catch {}
+  }, [feedbacks]);
+
   // Fonction pour assigner un feedback
   const assignFeedback = (feedbackId, developerId) => {
     const developer = developers.find(d => d.id === developerId);
     setFeedbacks(prev => prev.map(f => 
       f.id === feedbackId 
-        ? { ...f, assignedTo: developer, status: 'Assigned' }
+        ? { ...f, assignedTo: developer, status: 'In Progress' }
         : f
     ));
+    
+    // Mettre à jour le nombre de tâches du développeur
+    setDevelopers(prev => prev.map(d => 
+      d.id === developerId 
+        ? { ...d, tasks: d.tasks + 1 }
+        : d
+    ));
+
+    addNotification(`Feedback ${feedbackId} assigné à ${developer?.name || developerId}`);
+    
+    // Envoyer un event d'assignation au collaborateur (via localStorage)
+    try {
+      const assignedFeedback = feedbacks.find(f => f.id === feedbackId);
+      const username = developer?.username || (developer?.email ? developer.email.split('@')[0] : 'user');
+      const assignmentsKey = `assignments:${username}`;
+      const inboxKey = `inbox:${username}`;
+      const existing = JSON.parse(localStorage.getItem(assignmentsKey) || '[]');
+      const payload = {
+        id: assignedFeedback?.id || feedbackId,
+        title: (assignedFeedback?.message || '').slice(0, 50) || `Feedback ${feedbackId}`,
+        description: assignedFeedback?.message || '',
+        submittedBy: assignedFeedback?.submitter?.name || 'Admin',
+        date: new Date().toISOString().slice(0,10),
+        status: 'In Progress',
+        progress: 10
+      };
+      const updated = [
+        ...existing.filter(it => it.id !== payload.id),
+        payload
+      ];
+      localStorage.setItem(assignmentsKey, JSON.stringify(updated));
+      // Inbox notification
+      const inbox = JSON.parse(localStorage.getItem(inboxKey) || '[]');
+      inbox.unshift({
+        at: Date.now(),
+        message: `Nouveau feedback assigné #${payload.id} - ${payload.title}`
+      });
+      localStorage.setItem(inboxKey, JSON.stringify(inbox));
+    } catch {}
+    
     setShowAssignModal(false);
   };
 
@@ -97,11 +186,14 @@ export default function AdminDashboard() {
     };
     setDevelopers(prev => [...prev, newDeveloper]);
     setShowDeveloperModal(false);
+    addNotification(`Développeur ajouté: ${developerData.name}`);
   };
 
   // Fonction pour supprimer un développeur
   const deleteDeveloper = (developerId) => {
+    const dev = developers.find(d => d.id === developerId);
     setDevelopers(prev => prev.filter(d => d.id !== developerId));
+    addNotification(`Développeur supprimé: ${dev?.name || developerId}`);
   };
 
   // Fonction pour modifier un développeur
@@ -109,6 +201,7 @@ export default function AdminDashboard() {
     setDevelopers(prev => prev.map(d => 
       d.id === developerId ? { ...d, ...updatedData } : d
     ));
+    addNotification(`Développeur modifié: ${updatedData.name || developerId}`);
   };
 
   return (
@@ -300,12 +393,32 @@ export default function AdminDashboard() {
                     fontSize: '12px',
                     cursor: 'pointer',
                     padding: '4px 0',
-                    marginTop: '4px'
+                    marginTop: '4px',
+                    textDecoration: 'underline'
                   }}
                 >
                   Se déconnecter
                 </button>
               </div>
+            )}
+            {/* Bouton de déconnexion toujours visible même en mode collapsed */}
+            {sidebarCollapsed && (
+              <button 
+                onClick={handleLogout}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#EF4444',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  marginTop: '8px'
+                }}
+                title="Se déconnecter"
+              >
+                🚪
+              </button>
             )}
           </div>
         </div>
@@ -324,55 +437,53 @@ export default function AdminDashboard() {
         }}>
           <h1 style={{ fontSize: '24px', fontWeight: '600', color: '#1E293B' }}>Dashboard</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ position: 'relative' }}>
-              <input 
-                type="text" 
-                placeholder="Search feedback..." 
-                style={{
-                  padding: '8px 16px 8px 40px',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: '8px',
-                  width: '300px'
-                }}
-              />
-              <span style={{ 
-                position: 'absolute', 
-                left: '12px', 
-                top: '50%', 
-                transform: 'translateY(-50%)'
-              }}>
-                🔍
-              </span>
-            </div>
-            <div style={{ position: 'relative', cursor: 'pointer' }}>
+            <div ref={adminNotificationsRef} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setShowAdminNotifications(p => !p)}>
               🔔
-              <span style={{
-                position: 'absolute',
-                top: '-4px',
-                right: '-4px',
-                backgroundColor: '#EF4444',
-                color: 'white',
-                borderRadius: '50%',
-                width: '16px',
-                height: '16px',
-                fontSize: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                3
-              </span>
+              {adminNotifications.length > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  backgroundColor: '#EF4444',
+                  color: 'white',
+                  borderRadius: '50%',
+                  width: '16px',
+                  height: '16px',
+                  fontSize: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  {adminNotifications.length}
+                </span>
+              )}
+              {showAdminNotifications && (
+                <div style={{
+                  position: 'absolute', right: 0, top: '24px', width: '300px', maxHeight: '320px', overflowY: 'auto',
+                  background: '#fff', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', borderRadius: '8px', zIndex: 1000, padding: '8px'
+                }}>
+                  <strong style={{ display: 'block', marginBottom: '8px' }}>Notifications</strong>
+                  {adminNotifications.length === 0 ? (
+                    <p style={{ margin: 0 }}>Aucune notification</p>
+                  ) : (
+                    adminNotifications.map((text, idx) => (
+                      <div key={idx} style={{ background: '#F9FAFB', padding: '8px', borderRadius: '4px', marginBottom: '6px' }}>{text}</div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <div style={{ cursor: 'pointer' }}>⚙️</div>
+            <button 
+              onClick={handleLogout}
+              style={{
+                background: 'none', border: 'none', color: '#EF4444', fontSize: '14px', cursor: 'pointer', padding: '8px 16px', borderRadius: '6px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px'
+              }}
+            >
+              🚪 Se déconnecter
+            </button>
             <div style={{ 
-              width: '40px', 
-              height: '40px', 
-              backgroundColor: '#E2E8F0', 
-              borderRadius: '50%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer'
+              width: '40px', height: '40px', backgroundColor: '#E2E8F0', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
             }}>
               👤
             </div>
@@ -401,12 +512,12 @@ export default function AdminDashboard() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '32px', fontWeight: '600', color: '#1E293B' }}>
-                    124
+                    {feedbacks.length}
                   </div>
                   <div style={{ fontSize: '14px', color: '#64748B', marginBottom: '8px' }}>
                     Total Feedback
                   </div>
-                  <div style={{ fontSize: '14px', color: '#10B981' }}>↑ 12% from last week</div>
+                  <div style={{ fontSize: '14px', color: '#10B981' }}>Total des feedbacks reçus</div>
                 </div>
                 <div style={{ 
                   width: '48px', 
@@ -433,12 +544,12 @@ export default function AdminDashboard() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '32px', fontWeight: '600', color: '#1E293B' }}>
-                    18
+                    {feedbacks.filter(f => !f.assignedTo).length}
                   </div>
                   <div style={{ fontSize: '14px', color: '#64748B', marginBottom: '8px' }}>
                     Unassigned
                   </div>
-                  <div style={{ fontSize: '14px', color: '#EF4444' }}>↑ 5% from last week</div>
+                  <div style={{ fontSize: '14px', color: '#EF4444' }}>En attente d'assignation</div>
                 </div>
                 <div style={{ 
                   width: '48px', 
@@ -465,12 +576,12 @@ export default function AdminDashboard() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '32px', fontWeight: '600', color: '#1E293B' }}>
-                    42
+                    {feedbacks.filter(f => f.status === 'In Progress').length}
                   </div>
                   <div style={{ fontSize: '14px', color: '#64748B', marginBottom: '8px' }}>
                     In Progress
                   </div>
-                  <div style={{ fontSize: '14px', color: '#10B981' }}>↓ 3% from last week</div>
+                  <div style={{ fontSize: '14px', color: '#10B981' }}>En cours de traitement</div>
                 </div>
                 <div style={{ 
                   width: '48px', 
@@ -497,12 +608,12 @@ export default function AdminDashboard() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '32px', fontWeight: '600', color: '#1E293B' }}>
-                    64
+                    {feedbacks.filter(f => f.status === 'Resolved').length}
                   </div>
                   <div style={{ fontSize: '14px', color: '#64748B', marginBottom: '8px' }}>
                     Resolved
                   </div>
-                  <div style={{ fontSize: '14px', color: '#10B981' }}>↑ 18% from last week</div>
+                  <div style={{ fontSize: '14px', color: '#10B981' }}>Résolus avec succès</div>
                 </div>
                 <div style={{ 
                   width: '48px', 
@@ -510,7 +621,7 @@ export default function AdminDashboard() {
                   backgroundColor: '#D1FAE5', 
                   borderRadius: '12px',
                   display: 'flex',
-                  alignItems: 'center',
+                                  alignItems: 'center',
                   justifyContent: 'center',
                   fontSize: '24px'
                 }}>
@@ -552,297 +663,85 @@ export default function AdminDashboard() {
                 </thead>
                 <tbody>
                   {/* FB-001 */}
-                  <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
-                      #FB-001
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ 
-                          width: '32px', 
-                          height: '32px', 
-                          backgroundColor: '#E2E8F0', 
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '12px',
-                          color: '#64748B'
-                        }}>
-                          S
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
-                            Sarah Johnson
+                  {feedbacks.slice(0,3).map((row, idx) => (
+                    <tr key={row.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                      <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>#{row.id}</td>
+                      <td style={{ padding: '16px 24px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div style={{ width: '32px', height: '32px', backgroundColor: '#E2E8F0', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#64748B' }}>
+                            {row.submitter.name.charAt(0)}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#64748B' }}>
-                            sarah@example.com
+                          <div>
+                            <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>{row.submitter.name}</div>
+                            <div style={{ fontSize: '12px', color: '#64748B' }}>{row.submitter.email}</div>
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td 
-                      style={{ 
-                        padding: '16px 24px', 
-                        fontSize: '14px', 
-                        color: '#1E293B', 
-                        maxWidth: '300px',
-                        cursor: 'pointer',
-                        textDecoration: 'underline'
-                      }}
-                      onClick={() => openFeedbackModal(feedbacks[0])}
-                    >
-                      The login button doesn't work on mobile devi...
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <span style={{
-                        backgroundColor: '#FEF3C7',
-                        color: '#F59E0B',
-                        padding: '6px 16px',
-                        borderRadius: '20px',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                        border: 'none',
-                        boxShadow: '0 1px 3px rgba(245, 158, 11, 0.2)'
-                      }}>
-                        New
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <span style={{ color: '#64748B' }}>Unassigned</span>
-                    </td>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
-                      Aug 2, 2023
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button 
-                          style={{
-                            padding: '6px 12px',
-                            backgroundColor: '#3B82F6',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            cursor: 'pointer'
-                          }}
-                          onClick={() => openAssignModal(feedbacks[0])}
-                        >
-                          Assign
-                        </button>
-                        <button style={{
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          color: '#64748B'
+                      </td>
+                      <td 
+                        style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', maxWidth: '300px', cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => openFeedbackModal(row)}
+                      >
+                        {row.message.substring(0, 50)}...
+                      </td>
+                      <td style={{ padding: '16px 24px' }}>
+                        <span style={{
+                          backgroundColor: row.status === 'New' ? '#FEF3C7' : row.status === 'In Progress' ? '#DBEAFE' : '#D1FAE5',
+                          color: row.status === 'New' ? '#F59E0B' : row.status === 'In Progress' ? '#3B82F6' : '#10B981',
+                          padding: '6px 16px', borderRadius: '20px', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
                         }}>
-                          ⋮
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-
-                  {/* FB-002 */}
-                  <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
-                      #FB-002
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ 
-                          width: '32px', 
-                          height: '32px', 
-                          backgroundColor: '#E2E8F0', 
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '12px',
-                          color: '#64748B'
-                        }}>
-                          M
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
-                            Mike Peters
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#64748B' }}>
-                            mike@example.com
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', maxWidth: '300px' }}>
-                      Would be great to have a dark mode option fo...
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <span style={{
-                        backgroundColor: '#DBEAFE',
-                        color: '#3B82F6',
-                        padding: '6px 16px',
-                        borderRadius: '20px',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                        border: 'none',
-                        boxShadow: '0 1px 3px rgba(59, 130, 246, 0.2)'
-                      }}>
-                        In Progress
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ 
-                          width: '24px', 
-                          height: '24px', 
-                          backgroundColor: '#3B82F6', 
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '10px',
-                          color: 'white'
-                        }}>
-                          AC
-                        </div>
-                        <span style={{ fontSize: '14px', color: '#1E293B' }}>
-                          Alex Chen
+                          {row.status === 'Resolved' ? 'Resolved' : (row.status === 'In Progress' ? 'In Progress' : 'New')}
                         </span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
-                      Aug 1, 2023
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#3B82F6',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          cursor: 'pointer'
-                        }}>
-                          Update
-                        </button>
-                        <button style={{
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          color: '#64748B'
-                        }}>
-                          ⋮
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-
-                  {/* FB-003 */}
-                  <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
-                      #FB-003
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ 
-                          width: '32px', 
-                          height: '32px', 
-                          backgroundColor: '#E2E8F0', 
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '12px',
-                          color: '#64748B'
-                        }}>
-                          L
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
-                            Lisa Wong
+                      </td>
+                      <td style={{ padding: '16px 24px' }}>
+                        {row.assignedTo ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ width: '24px', height: '24px', backgroundColor: '#3B82F6', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: 'white' }}>
+                              {row.assignedTo.name.split(' ').map(n => n.charAt(0)).join('')}
+                            </div>
+                            <span style={{ fontSize: '14px', color: '#1E293B' }}>{row.assignedTo.name}</span>
                           </div>
-                          <div style={{ fontSize: '12px', color: '#64748B' }}>
-                            lisa@example.com
-                          </div>
+                        ) : (
+                          <span style={{ color: '#64748B' }}>Unassigned</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>{row.date}</td>
+                      <td style={{ padding: '16px 24px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {!row.assignedTo && row.status === 'New' && (
+                            <button 
+                              style={{ padding: '6px 12px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                              onClick={() => openAssignModal(row)}
+                            >
+                              Assign
+                            </button>
+                          )}
+                          {row.assignedTo && row.status === 'In Progress' && (
+                            <button 
+                              style={{ padding: '6px 12px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                              onClick={() => {
+                                // Update -> just keep modal to edit if needed
+                                openFeedbackModal(row);
+                              }}
+                            >
+                              Update
+                            </button>
+                          )}
+                          {row.status === 'Resolved' && (
+                            <button 
+                              style={{ padding: '6px 12px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                              onClick={() => {
+                                // Close the feedback (archive locally)
+                                setFeedbacks(prev => prev.filter(f => f.id !== row.id));
+                              }}
+                            >
+                              Close
+                            </button>
+                          )}
+                          <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#64748B' }}>⋮</button>
                         </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', maxWidth: '300px' }}>
-                      Export to PDF option isn't working in Firefox b...
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <span style={{
-                        backgroundColor: '#D1FAE5',
-                        color: '#10B981',
-                        padding: '6px 16px',
-                        borderRadius: '20px',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px',
-                        border: 'none',
-                        boxShadow: '0 1px 3px rgba(16, 185, 129, 0.2)'
-                      }}>
-                        Resolved
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ 
-                          width: '24px', 
-                          height: '24px', 
-                          backgroundColor: '#3B82F6', 
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '10px',
-                          color: 'white'
-                        }}>
-                          DK
-                        </div>
-                        <span style={{ fontSize: '14px', color: '#1E293B' }}>
-                          David Kim
-                        </span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
-                      Jul 30, 2023
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#3B82F6',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          cursor: 'pointer'
-                        }}>
-                          Close
-                        </button>
-                        <button style={{
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          color: '#64748B'
-                        }}>
-                          ⋮
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -865,146 +764,59 @@ export default function AdminDashboard() {
                 Developer Workload
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '36px', 
-                    height: '36px', 
-                    backgroundColor: '#3B82F6', 
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '13px',
-                    color: 'white',
-                    fontWeight: '600'
-                  }}>
-                    AC
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#1E293B', marginBottom: '6px' }}>
-                      Alex Chen
+                {developers.map(developer => {
+                  const maxTasks = Math.max(...developers.map(d => d.tasks), 1);
+                  const percentage = (developer.tasks / maxTasks) * 100;
+                  
+                  return (
+                    <div key={developer.id} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <div style={{ 
+                        width: '36px', 
+                        height: '36px', 
+                        backgroundColor: '#3B82F6', 
+                        borderRadius: '50%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '13px',
+                        color: 'white',
+                        fontWeight: '600'
+                      }}>
+                        {developer.name.split(' ').map(n => n.charAt(0)).join('')}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '14px', fontWeight: '600', color: '#1E293B', marginBottom: '6px' }}>
+                          {developer.name}
+                        </div>
+                        <div style={{ 
+                          width: '100%', 
+                          height: '10px', 
+                          backgroundColor: '#F1F5F9', 
+                          borderRadius: '6px',
+                          overflow: 'hidden',
+                          position: 'relative'
+                        }}>
+                          <div style={{
+                            width: `${percentage}%`,
+                            height: '100%',
+                            backgroundColor: '#3B82F6',
+                            borderRadius: '6px',
+                            transition: 'width 0.3s ease'
+                          }} />
+                        </div>
+                      </div>
+                      <div style={{ 
+                        fontSize: '13px', 
+                        fontWeight: '600', 
+                        color: '#1E293B',
+                        minWidth: '50px',
+                        textAlign: 'right'
+                      }}>
+                        {developer.tasks} tasks
+                      </div>
                     </div>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '75%',
-                        height: '100%',
-                        backgroundColor: '#3B82F6',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '50px',
-                    textAlign: 'right'
-                  }}>
-                    15 tasks
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '36px', 
-                    height: '36px', 
-                    backgroundColor: '#3B82F6', 
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '13px',
-                    color: 'white',
-                    fontWeight: '600'
-                  }}>
-                    DK
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#1E293B', marginBottom: '6px' }}>
-                      David Kim
-                    </div>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '60%',
-                        height: '100%',
-                        backgroundColor: '#3B82F6',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '50px',
-                    textAlign: 'right'
-                  }}>
-                    12 tasks
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '36px', 
-                    height: '36px', 
-                    backgroundColor: '#3B82F6', 
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '13px',
-                    color: 'white',
-                    fontWeight: '600'
-                  }}>
-                    ER
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#1E293B', marginBottom: '6px' }}>
-                      Emily Rodriguez
-                    </div>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '40%',
-                        height: '100%',
-                        backgroundColor: '#3B82F6',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '50px',
-                    textAlign: 'right'
-                  }}>
-                    8 tasks
-                  </div>
-                </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1019,165 +831,64 @@ export default function AdminDashboard() {
                 Feedback Status
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '70px', 
-                    fontSize: '11px', 
-                    fontWeight: '600', 
-                    color: '#3B82F6',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                  }}>
-                    NEW
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '18%',
-                        height: '100%',
-                        backgroundColor: '#3B82F6',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '45px',
-                    textAlign: 'right'
-                  }}>
-                    18%
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '70px', 
-                    fontSize: '11px', 
-                    fontWeight: '600', 
-                    color: '#F59E0B',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                  }}>
-                    ASSIGNED
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '24%',
-                        height: '100%',
-                        backgroundColor: '#F59E0B',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '45px',
-                    textAlign: 'right'
-                  }}>
-                    24%
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '70px', 
-                    fontSize: '11px', 
-                    fontWeight: '600', 
-                    color: '#8B5CF6',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                  }}>
-                    IN PROGRESS
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '34%',
-                        height: '100%',
-                        backgroundColor: '#8B5CF6',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '45px',
-                    textAlign: 'right'
-                  }}>
-                    34%
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                  <div style={{ 
-                    width: '70px', 
-                    fontSize: '11px', 
-                    fontWeight: '600', 
-                    color: '#10B981',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                  }}>
-                    RESOLVED
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '10px', 
-                      backgroundColor: '#F1F5F9', 
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: '24%',
-                        height: '100%',
-                        backgroundColor: '#10B981',
-                        borderRadius: '6px',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
-                  </div>
-                  <div style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    color: '#1E293B',
-                    minWidth: '45px',
-                    textAlign: 'right'
-                  }}>
-                    24%
-                  </div>
-                </div>
+                {(() => {
+                  const total = feedbacks.length;
+                  const newCount = feedbacks.filter(f => f.status === 'New').length;
+                  const inProgressCount = feedbacks.filter(f => f.status === 'In Progress').length;
+                  const resolvedCount = feedbacks.filter(f => f.status === 'Resolved').length;
+                  
+                  const statuses = [
+                    { name: 'NEW', count: newCount, color: '#3B82F6', bgColor: '#3B82F6' },
+                    { name: 'IN PROGRESS', count: inProgressCount, color: '#8B5CF6', bgColor: '#8B5CF6' },
+                    { name: 'RESOLVED', count: resolvedCount, color: '#10B981', bgColor: '#10B981' }
+                  ];
+                  
+                  return statuses.map(status => {
+                    const percentage = total > 0 ? (status.count / total) * 100 : 0;
+                    
+                    return (
+                      <div key={status.name} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ 
+                          width: '70px', 
+                          fontSize: '11px', 
+                          fontWeight: '600', 
+                          color: status.color,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px'
+                        }}>
+                          {status.name}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ 
+                            width: '100%', 
+                            height: '10px', 
+                            backgroundColor: '#F1F5F9', 
+                            borderRadius: '6px',
+                            overflow: 'hidden',
+                            position: 'relative'
+                          }}>
+                            <div style={{
+                              width: `${percentage}%`,
+                              height: '100%',
+                              backgroundColor: status.bgColor,
+                              borderRadius: '6px',
+                              transition: 'width 0.3s ease'
+                            }} />
+                          </div>
+                        </div>
+                        <div style={{ 
+                          fontSize: '13px', 
+                          fontWeight: '600', 
+                          color: '#1E293B',
+                          minWidth: '45px',
+                          textAlign: 'right'
+                        }}>
+                          {Math.round(percentage)}%
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           </div>
@@ -1435,6 +1146,425 @@ export default function AdminDashboard() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* Vue Unassigned */}
+          {currentView === 'unassigned' && (
+            <div>
+              <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#1E293B', marginBottom: '24px' }}>
+                Feedbacks Non Assignés
+              </h2>
+              <div style={{ 
+                backgroundColor: 'white', 
+                borderRadius: '12px',
+                border: '1px solid #E2E8F0'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ID</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>SUBMITTER</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>MESSAGE</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>DATE</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feedbacks.filter(f => !f.assignedTo).map(feedback => (
+                      <tr key={feedback.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
+                          {feedback.id}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              backgroundColor: '#E2E8F0', 
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '12px',
+                              color: '#64748B'
+                            }}>
+                              {feedback.submitter.name.charAt(0)}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
+                                {feedback.submitter.name}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748B' }}>
+                                {feedback.submitter.email}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td 
+                          style={{ 
+                            padding: '16px 24px', 
+                            fontSize: '14px', 
+                            color: '#1E293B', 
+                            maxWidth: '300px',
+                            cursor: 'pointer',
+                            textDecoration: 'underline'
+                          }}
+                          onClick={() => openFeedbackModal(feedback)}
+                        >
+                          {feedback.message.substring(0, 50)}...
+                        </td>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
+                          {feedback.date}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <button 
+                            style={{
+                              padding: '6px 12px',
+                              backgroundColor: '#3B82F6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => openAssignModal(feedback)}
+                          >
+                            Assigner
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Vue In Progress */}
+          {currentView === 'in-progress' && (
+            <div>
+              <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#1E293B', marginBottom: '24px' }}>
+                Feedbacks En Cours
+              </h2>
+              <div style={{ 
+                backgroundColor: 'white', 
+                borderRadius: '12px',
+                border: '1px solid #E2E8F0'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ID</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>SUBMITTER</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>MESSAGE</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ASSIGNED TO</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>PROGRESS</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>DATE</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feedbacks.filter(f => f.assignedTo && f.status === 'In Progress').map(feedback => (
+                      <tr key={feedback.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
+                          {feedback.id}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              backgroundColor: '#E2E8F0', 
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '12px',
+                              color: '#64748B'
+                            }}>
+                              {feedback.submitter.name.charAt(0)}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
+                                {feedback.submitter.name}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748B' }}>
+                                {feedback.submitter.email}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td 
+                          style={{ 
+                            padding: '16px 24px', 
+                            fontSize: '14px', 
+                            color: '#1E293B', 
+                            maxWidth: '300px',
+                            cursor: 'pointer',
+                            textDecoration: 'underline'
+                          }}
+                          onClick={() => openFeedbackModal(feedback)}
+                        >
+                          {feedback.message.substring(0, 50)}...
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ 
+                              width: '24px', 
+                              height: '24px', 
+                              backgroundColor: '#3B82F6', 
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '10px',
+                              color: 'white'
+                            }}>
+                              {feedback.assignedTo.name.split(' ').map(n => n.charAt(0)).join('')}
+                            </div>
+                            <span style={{ fontSize: '14px', color: '#1E293B' }}>
+                              {feedback.assignedTo.name}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ 
+                              width: '100px', 
+                              height: '8px', 
+                              backgroundColor: '#F1F5F9', 
+                              borderRadius: '4px',
+                              overflow: 'hidden'
+                            }}>
+                              <div style={{
+                                width: `${feedback.progress}%`,
+                                height: '100%',
+                                backgroundColor: '#3B82F6',
+                                borderRadius: '4px'
+                              }} />
+                            </div>
+                            <span style={{ fontSize: '12px', color: '#64748B', minWidth: '40px' }}>
+                              {feedback.progress}%
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
+                          {feedback.date}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <button 
+                            style={{
+                              padding: '6px 12px',
+                              backgroundColor: '#10B981',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => {
+                              // Marquer comme résolu
+                              setFeedbacks(prev => prev.map(f => 
+                                f.id === feedback.id 
+                                  ? { ...f, status: 'Resolved', progress: 100 }
+                                  : f
+                              ));
+                            }}
+                          >
+                            Marquer résolu
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Vue Resolved */}
+          {currentView === 'resolved' && (
+            <div>
+              <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#1E293B', marginBottom: '24px' }}>
+                Feedbacks Résolus
+              </h2>
+              <div style={{ 
+                backgroundColor: 'white', 
+                borderRadius: '12px',
+                border: '1px solid #E2E8F0'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ID</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>SUBMITTER</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>MESSAGE</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ASSIGNED TO</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>DATE RÉSOLUTION</th>
+                      <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748B' }}>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feedbacks.filter(f => f.status === 'Resolved').map(feedback => (
+                      <tr key={feedback.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#1E293B', fontWeight: '500' }}>
+                          {feedback.id}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              backgroundColor: '#E2E8F0', 
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '12px',
+                              color: '#64748B'
+                            }}>
+                              {feedback.submitter.name.charAt(0)}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '14px', fontWeight: '500', color: '#1E293B' }}>
+                                {feedback.submitter.name}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748B' }}>
+                                {feedback.submitter.email}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td 
+                          style={{ 
+                            padding: '16px 24px', 
+                            fontSize: '14px', 
+                            color: '#1E293B', 
+                            maxWidth: '300px',
+                            cursor: 'pointer',
+                            textDecoration: 'underline'
+                          }}
+                          onClick={() => openFeedbackModal(feedback)}
+                        >
+                          {feedback.message.substring(0, 50)}...
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ 
+                              width: '24px', 
+                              height: '24px', 
+                              backgroundColor: '#3B82F6', 
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '10px',
+                              color: 'white'
+                            }}>
+                              {feedback.assignedTo.name.split(' ').map(n => n.charAt(0)).join('')}
+                            </div>
+                            <span style={{ fontSize: '14px', color: '#1E293B' }}>
+                              {feedback.assignedTo.name}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '16px 24px', fontSize: '14px', color: '#64748B' }}>
+                          {feedback.date}
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <button 
+                            style={{
+                              padding: '6px 12px',
+                              backgroundColor: '#F1F5F9',
+                              color: '#64748B',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Voir détails
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Vue Settings */}
+          {currentView === 'settings' && (
+            <div>
+              <h2 style={{ fontSize: '24px', fontWeight: '600', color: '#1E293B', marginBottom: '24px' }}>
+                Paramètres
+              </h2>
+              <div style={{ 
+                backgroundColor: 'white', 
+                borderRadius: '12px',
+                border: '1px solid #E2E8F0',
+                padding: '24px'
+              }}>
+                <div style={{ marginBottom: '24px' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#1E293B', marginBottom: '16px' }}>
+                    Notifications
+                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                    <input type="checkbox" id="email-notifications" defaultChecked />
+                    <label htmlFor="email-notifications" style={{ color: '#1E293B' }}>
+                      Notifications par email
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input type="checkbox" id="browser-notifications" defaultChecked />
+                    <label htmlFor="browser-notifications" style={{ color: '#1E293B' }}>
+                      Notifications navigateur
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '24px' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#1E293B', marginBottom: '16px' }}>
+                    Interface
+                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                    <input type="checkbox" id="dark-mode" />
+                    <label htmlFor="dark-mode" style={{ color: '#1E293B' }}>
+                      Mode sombre
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input type="checkbox" id="compact-view" />
+                    <label htmlFor="compact-view" style={{ color: '#1E293B' }}>
+                      Vue compacte
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  gap: '12px',
+                  justifyContent: 'flex-end'
+                }}>
+                  <button 
+                    style={{
+                      padding: '10px 20px',
+                      backgroundColor: '#3B82F6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Sauvegarder
+                  </button>
+                </div>
               </div>
             </div>
           )}

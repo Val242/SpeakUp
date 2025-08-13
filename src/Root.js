@@ -1,31 +1,32 @@
-import React, { useEffect, useState } from 'react';
-import App from './App';
-import AdminDashboard from './pages/AdminDashboard';
+import React, { useState, useEffect } from 'react';
+import CollaboratorDashboard from './pages/CollaboratorDashboard';
 import Login from './pages/Login';
-
-const getRouteFromHash = () => {
-  const hash = window.location.hash || '#/login';
-  const path = hash.replace('#', '');
-  return path || '/login';
-};
+import AdminDashboard from './pages/AdminDashboard';
 
 export default function Root() {
-  const [route, setRoute] = useState(getRouteFromHash());
+  const [path, setPath] = useState(window.location.hash);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(getRouteFromHash());
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    const handleHashChange = () => {
+      setPath(window.location.hash);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  if (route.startsWith('/admin')) {
-    return <AdminDashboard />;
+  let ComponentToRender;
+  switch (path) {
+    case '#/admin':
+      ComponentToRender = AdminDashboard;
+      break;
+    case '#/collaborator':
+      ComponentToRender = CollaboratorDashboard;
+      break;
+    default:
+      ComponentToRender = Login;
+      break;
   }
 
-  if (route.startsWith('/developer')) {
-    return <App />;
-  }
-
-  return <Login />;
+  return <ComponentToRender />;
 }
 

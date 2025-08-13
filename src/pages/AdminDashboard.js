@@ -11,44 +11,9 @@ export default function AdminDashboard() {
   const [selectedDeveloper, setSelectedDeveloper] = useState(null);
   
   // États pour les données
-  const [developers, setDevelopers] = useState([
-    { id: 1, name: 'Alex Chen', email: 'alex@example.com', username: 'alexchen', tasks: 15 },
-    { id: 2, name: 'David Kim', email: 'david@example.com', username: 'davidkim', tasks: 12 },
-    { id: 3, name: 'Emily Rodriguez', email: 'emily@example.com', username: 'emilyrod', tasks: 8 }
-  ]);
+  const [developers, setDevelopers] = useState([]);
   
-  const [feedbacks, setFeedbacks] = useState([
-    {
-      id: 'FB-001',
-      submitter: { name: 'Sarah Johnson', email: 'sarah@example.com' },
-      message: 'The login button doesn\'t work on mobile devices. When I tap it, nothing happens. This is very frustrating as I need to access my account from my phone.',
-      status: 'New',
-      assignedTo: null,
-      date: 'Aug 2, 2023',
-      photos: ['photo1.jpg', 'photo2.jpg'],
-      progress: 0
-    },
-    {
-      id: 'FB-002',
-      submitter: { name: 'Mike Peters', email: 'mike@example.com' },
-      message: 'Would be great to have a dark mode option for the application. The current bright theme is hard on the eyes during night usage.',
-      status: 'In Progress',
-      assignedTo: { id: 1, name: 'Alex Chen' },
-      date: 'Aug 1, 2023',
-      photos: [],
-      progress: 65
-    },
-    {
-      id: 'FB-003',
-      submitter: { name: 'Lisa Wong', email: 'lisa@example.com' },
-      message: 'Export to PDF option isn\'t working in Firefox browser. It works fine in Chrome but fails in Firefox with an error message.',
-      status: 'Resolved',
-      assignedTo: { id: 2, name: 'David Kim' },
-      date: 'Jul 30, 2023',
-      photos: ['error_screenshot.png'],
-      progress: 100
-    }
-  ]);
+  const [feedbacks, setFeedbacks] = useState([]);
 
   // Notifications Admin
   const [adminNotifications, setAdminNotifications] = useState([]);
@@ -687,7 +652,7 @@ export default function AdminDashboard() {
                         <span style={{
                           backgroundColor: row.status === 'New' ? '#FEF3C7' : row.status === 'In Progress' ? '#DBEAFE' : '#D1FAE5',
                           color: row.status === 'New' ? '#F59E0B' : row.status === 'In Progress' ? '#3B82F6' : '#10B981',
-                          padding: '6px 16px', borderRadius: '20px', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                          padding: '6px 16px', borderRadius: '20px', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', whiteSpace: 'nowrap'
                         }}>
                           {row.status === 'Resolved' ? 'Resolved' : (row.status === 'In Progress' ? 'In Progress' : 'New')}
                         </span>
